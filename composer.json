@@ -1,5 +1,5 @@
 {
-  "name": "djagya/yii2-sparkpost",
+  "name": "obregonco/yii2-sparkpost",
   "version": "0.2.6",
   "description": "A library provides Yii2 integration with SparkPost mail service",
   "keywords": [
@@ -13,7 +13,7 @@
   "require": {
     "php": ">=5.5",
     "yiisoft/yii2": "*",
-    "sparkpost/php-sparkpost": "~1.0",
+    "sparkpost/php-sparkpost": "*",
     "guzzlehttp/guzzle": "~6.0"
   },
   "require-dev": {
