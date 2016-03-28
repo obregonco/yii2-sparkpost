@@ -7,7 +7,7 @@
  * @author Danil Zakablukovskii <danil.kabluk@gmail.com>
  */
 
-namespace djagya\sparkpost;
+namespace obregonco\sparkpost;
 
 use GuzzleHttp\Client;
 use Ivory\HttpAdapter\Guzzle6HttpAdapter;
