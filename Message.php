@@ -7,7 +7,7 @@
  * @author Danil Zakablukovskii <danil.kabluk@gmail.com>
  */
 
-namespace djagya\sparkpost;
+namespace obregonco\sparkpost;
 
 use yii\base\NotSupportedException;
 use yii\helpers\ArrayHelper;
