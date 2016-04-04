@@ -63,7 +63,7 @@ class Mailer extends BaseMailer
     /**
      * @inheritdoc
      */
-    public $messageClass = 'djagya\sparkpost\Message';
+    public $messageClass = 'obregonco\sparkpost\Message';
 
     /** @var SparkPost */
     private $_sparkPost;
