@@ -51,15 +51,15 @@ class MessageTest extends \Codeception\TestCase\Test
 
         $to = 'someuser@somedomain.com';
         $message->setTo($to);
-        $this->assertContains($to, array_keys($message->getTo()), 'Unable to set to!');
+        $this->assertContains($to, $message->getTo(), 'Unable to set to!');
 
         $cc = 'ccuser@somedomain.com';
         $message->setCc($cc);
-        $this->assertContains($cc, array_keys($message->getCc()), 'Unable to set cc!');
+        $this->assertContains($cc, $message->getCc(), 'Unable to set cc!');
 
         $bcc = 'bccuser@somedomain.com';
         $message->setBcc($bcc);
-        $this->assertContains($bcc, array_keys($message->getBcc()), 'Unable to set bcc!');
+        $this->assertContains($bcc, $message->getBcc(), 'Unable to set bcc!');
 
         $text = 'Text email';
         $message->setTextBody($text);
@@ -132,6 +132,64 @@ class MessageTest extends \Codeception\TestCase\Test
 
         $this->assertEquals([$cc], $message->getCc());
         $this->assertEquals($bcc, $message->getBcc());
+    }
+
+    public function testRecipientsReset()
+    {
+        $message = new Message();
+
+        // to
+        $recipients = [
+            'email1@ex.com',
+            'email2@ex.com' => 'name',
+            'email3@ex.com',
+            'email4@ex.com' => 'name1',
+        ];
+
+        $message->setTo($recipients);
+        $this->assertEquals($recipients, $message->getTo());
+
+        // reset recipients
+        $message->setTo('email1@ex.com');
+        $this->assertEquals(['email1@ex.com'], $message->getTo());
+        $message->setTo('');
+        $this->assertEmpty($message->getTo());
+
+
+        // cc
+        $recipients = [
+            'email1@ex.com',
+            'email2@ex.com' => 'name',
+            'email3@ex.com',
+            'email4@ex.com' => 'name1',
+        ];
+
+        $message->setCc($recipients);
+        $this->assertEquals($recipients, $message->getCc());
+
+        // reset recipients
+        $message->setCc('email1@ex.com');
+        $this->assertEquals(['email1@ex.com'], $message->getCc());
+        $message->setCc('');
+        $this->assertEmpty($message->getCc());
+
+
+        // bcc
+        $recipients = [
+            'email1@ex.com',
+            'email2@ex.com' => 'name',
+            'email3@ex.com',
+            'email4@ex.com' => 'name1',
+        ];
+
+        $message->setBcc($recipients);
+        $this->assertEquals($recipients, $message->getBcc());
+
+        // reset recipients
+        $message->setBcc('email1@ex.com');
+        $this->assertEquals(['email1@ex.com'], $message->getBcc());
+        $message->setBcc('');
+        $this->assertEmpty($message->getBcc());
     }
 
     public function testAttachFile()
@@ -217,5 +275,102 @@ class MessageTest extends \Codeception\TestCase\Test
         $image = $images[1];
         $this->assertEquals($image['name'], 'image_1');
         $this->assertEquals($cid1, 'image_1');
+    }
+
+    public function testUserData()
+    {
+        $message = new Message();
+
+        // To
+        $message->setTo([
+            'example@mail.com' => [
+                'name' => 'Recipient #1',
+                'metadata' => [
+                    'key' => 'value',
+                ],
+                'substitution_data' => [
+                    'template_key' => 'value',
+                ],
+                'tags' => ['tag1', 'tag2'],
+            ],
+        ]);
+        $this->assertEquals(['example@mail.com' => 'Recipient #1'], $message->getTo());
+        $this->assertEquals([
+            'example@mail.com' => [
+                'metadata' => [
+                    'key' => 'value',
+                ],
+                'substitution_data' => [
+                    'template_key' => 'value',
+                ],
+                'tags' => ['tag1', 'tag2'],
+            ]
+        ], $message->getUserData());
+
+        // Sparkpost array
+        $this->assertEquals([
+            [
+                'address' => ['email' => 'example@mail.com', 'name' => 'Recipient #1'],
+                'metadata' => [
+                    'key' => 'value',
+                ],
+                'substitution_data' => [
+                    'template_key' => 'value',
+                ],
+                'tags' => ['tag1', 'tag2'],
+            ]
+        ], $message->toSparkPostArray()['recipients']);
+
+        // Cc
+        $message->setCc([
+            'example@mail.com' => [
+                'name' => 'Recipient #1',
+                'metadata' => [
+                    'key' => 'value',
+                ],
+                'substitution_data' => [
+                    'template_key' => 'value',
+                ],
+                'tags' => ['tag1', 'tag2'],
+            ],
+        ]);
+        $this->assertEquals(['example@mail.com' => 'Recipient #1'], $message->getCc());
+        $this->assertEquals([
+            'example@mail.com' => [
+                'metadata' => [
+                    'key' => 'value',
+                ],
+                'substitution_data' => [
+                    'template_key' => 'value',
+                ],
+                'tags' => ['tag1', 'tag2'],
+            ]
+        ], $message->getUserData());
+
+        // Bcc
+        $message->setBcc([
+            'example@mail.com' => [
+                'name' => 'Recipient #1',
+                'metadata' => [
+                    'key' => 'value',
+                ],
+                'substitution_data' => [
+                    'template_key' => 'value',
+                ],
+                'tags' => ['tag1', 'tag2'],
+            ],
+        ]);
+        $this->assertEquals(['example@mail.com' => 'Recipient #1'], $message->getBcc());
+        $this->assertEquals([
+            'example@mail.com' => [
+                'metadata' => [
+                    'key' => 'value',
+                ],
+                'substitution_data' => [
+                    'template_key' => 'value',
+                ],
+                'tags' => ['tag1', 'tag2'],
+            ]
+        ], $message->getUserData());
     }
 }

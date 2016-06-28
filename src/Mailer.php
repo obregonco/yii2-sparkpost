@@ -9,11 +9,12 @@
 
 namespace obregonco\sparkpost;
 
-use GuzzleHttp\Client;
-use Ivory\HttpAdapter\Guzzle6HttpAdapter;
+use Ivory\HttpAdapter\Configuration;
+use Ivory\HttpAdapter\CurlHttpAdapter;
 use SparkPost\APIResponseException;
 use SparkPost\SparkPost;
 use yii\base\InvalidConfigException;
+use yii\BaseYii;
 use yii\helpers\ArrayHelper;
 use yii\mail\BaseMailer;
 
@@ -26,6 +27,19 @@ use yii\mail\BaseMailer;
 class Mailer extends BaseMailer
 {
     const LOG_CATEGORY = 'sparkpost-mailer';
+
+    /**
+     * Allowed limit for send retries, positive integer.
+     * If limit is reached, last error will be thrown.
+     * @var int
+     */
+    public $retryLimit = 5;
+
+    /**
+     * As a default http adapter will be used CurlHttpAdapter.
+     * @var array|callable|string
+     */
+    public $httpAdapter;
 
     /**
      * @var string SparkPost API Key, required.
@@ -61,9 +75,25 @@ class Mailer extends BaseMailer
     public $defaultEmail;
 
     /**
+     * If the development mode is enabled, Mailer will throw an exception if something goes wrong.
+     * If the development mode is disabled, Mailer will fail gracefully.
+     * @var bool
+     */
+    public $developmentMode = true;
+
+    /**
      * @inheritdoc
      */
     public $messageClass = 'obregonco\sparkpost\Message';
+
+    /** @var int amount of sent messages last 'sendMessage' call */
+    public $sentCount = 0;
+    /** @var int amount of rejected messages last 'sendMessage' call */
+    public $rejectedCount = 0;
+    /** @var string last transaction id */
+    public $lastTransmissionId;
+    /** @var null|APIResponseException last transmission exception (if any) */
+    public $lastError;
 
     /** @var SparkPost */
     private $_sparkPost;
@@ -84,7 +114,10 @@ class Mailer extends BaseMailer
 
         $this->sparkpostConfig['key'] = $this->apiKey;
 
-        $httpAdapter = new Guzzle6HttpAdapter(new Client());
+        // Initialize the http adapter, cUrl adapter is default
+        $adapterConfig = new Configuration();
+        $adapterConfig->setTimeout(4);
+        $httpAdapter = $this->httpAdapter ? BaseYii::createObject($this->httpAdapter) : new CurlHttpAdapter($adapterConfig);
         $this->_sparkPost = new SparkPost($httpAdapter, $this->sparkpostConfig);
 
         if ($this->useDefaultEmail && !$this->defaultEmail) {
@@ -155,32 +188,68 @@ class Mailer extends BaseMailer
      * @link https://support.sparkpost.com/customer/en/portal/articles/2140916-extended-error-codes Errors descriptions
      * @param Message $message
      * @return bool
-     * @throws \Exception
+     * @throws APIResponseException
      */
     protected function sendMessage($message)
     {
-        try {
-            $result = $this->_sparkPost->transmission->send($message->toSparkPostArray());
+        // Clear info about last transmission.
+        $this->lastTransmissionId = $this->lastError = null;
+        $this->sentCount = $this->rejectedCount = 0;
 
-            if (ArrayHelper::getValue($result, 'total_accepted_recipients') === 0) {
-                \Yii::info('Transmission #' . ArrayHelper::getValue($result, 'id') . ' was rejected: ' .
-                    ArrayHelper::getValue($result, 'total_rejected_recipients') . ' rejected',
-                    self::LOG_CATEGORY);
+        if (!$message->getTo()) {
+            \Yii::warning('Message was not sent, because "to" recipients list is empty', self::LOG_CATEGORY);
 
-                return false;
-            }
-
-            if (ArrayHelper::getValue($result, 'total_rejected_recipients') > 0) {
-                \Yii::info('Transmission #' . ArrayHelper::getValue($result, 'id') . ': ' .
-                    ArrayHelper::getValue($result, 'total_rejected_recipients') . ' rejected',
-                    self::LOG_CATEGORY);
-            }
-
-            return true;
-        } catch (APIResponseException $e) {
-            \Yii::error($e->getMessage(), self::LOG_CATEGORY);
-            throw new \Exception('An error occurred in mailer, check your application logs.', 500, $e);
+            return false;
         }
+
+        $attemptsCount = 0;
+        while ($attemptsCount <= $this->retryLimit) {
+            $attemptsCount++;
+
+            try {
+                return $this->internalSend($message);
+            } catch (APIResponseException $e) {
+                $this->lastError = $e;
+            }
+        }
+
+        // Transmission wasn't sent.
+        \Yii::error("An error occurred in mailer: {$this->lastError->getMessage()}, code: {$this->lastError->getAPICode()}, api message: \"{$this->lastError->getAPIMessage()}\", api description: \"{$this->lastError->getAPIDescription()}\"",
+            self::LOG_CATEGORY);
+
+        if ($this->developmentMode) {
+            throw $this->lastError;
+        } else {
+            return false;
+        }
+    }
+
+    /**
+     * @param Message $message
+     * @return bool
+     */
+    protected function internalSend($message)
+    {
+        $result = $this->_sparkPost->transmission->send($message->toSparkPostArray());
+        $this->lastTransmissionId = ArrayHelper::getValue($result, 'results.id');
+
+        // Rejected messages.
+        $this->rejectedCount = ArrayHelper::getValue($result, 'results.total_rejected_recipients');
+        if ($this->rejectedCount > 0) {
+            \Yii::info("Transmission #{$this->lastTransmissionId}: {$this->rejectedCount} rejected",
+                self::LOG_CATEGORY);
+        }
+
+        // Sent messages.
+        $this->sentCount = ArrayHelper::getValue($result, 'results.total_accepted_recipients');
+        if ($this->sentCount === 0) {
+            \Yii::info("Transmission #{$this->lastTransmissionId} was rejected: all {$this->rejectedCount} rejected",
+                self::LOG_CATEGORY);
+
+            return false;
+        }
+
+        return true;
     }
 
     /**

@@ -42,18 +42,17 @@ class Message extends BaseMessage
         'text',
         'rfc822',
         'customHeaders' => 'headers',
-        'recipients' => 'to',
+        'recipients' => 'sparkpostRecipients',
         'recipientList' => 'to.list_id',
         'template' => 'templateId',
+        'useDraftTemplate',
         'trackOpens' => 'options.open_tracking',
         'trackClicks' => 'options.click_tracking',
-        'useDraftTemplate',
-
-        // TODO wait for sparkpost lib add these values to the mapping
-//        'start_time',
-//        'sandbox',
-//        'attachments',
-//        'inline_images' => 'images',
+        'transactional' => 'options.transactional',
+        'sandbox' => 'options.sandbox',
+        'startTime' => 'options.start_time',
+        'inline_images' => 'images',
+        'attachments',
     ];
 
     /**
@@ -70,7 +69,7 @@ class Message extends BaseMessage
      *
      * OR an array of recipients:
      * [
-     *  'address' => string | ['email' => '', 'name' => '', 'header_to' => ''],
+     *  'email' => 'name', 'email',
      * ],
      * where 'header_to' is used to mark Cc and Bcc recipients.
      *
@@ -80,6 +79,39 @@ class Message extends BaseMessage
      * @var array
      */
     private $_to = [];
+
+    /**
+     * User specific data:
+     * [
+     *  'email' => [
+     *      'metadata' => [optional array],
+     *      'substitution_data' => [optional array],
+     *      'tags' => [optional array],
+     *  ]
+     * ]
+     * @var array
+     */
+    private $_userData = [];
+
+    /**
+     * List of CC recipients
+     * @var array
+     */
+    private $_cc = [];
+
+    /**
+     * List of BCC recipients
+     * @var array
+     */
+    private $_bcc = [];
+
+    /**
+     * Compiled list of To, Cc and Bcc recipients for Sparkpost library.
+     *
+     * @link https://developers.sparkpost.com/api/#/reference/recipient-lists Recipient Lists and Attributes
+     * @var array
+     */
+    private $_sparkpostRecipients = [];
 
     /**
      * @var string Email address
@@ -255,23 +287,7 @@ class Message extends BaseMessage
             return [$this->_to['list_id']];
         }
 
-        $addresses = [];
-        foreach ($this->_to as $item) {
-            $item = $item['address'];
-
-            // skip recipients with set header_to, i.e. CC and BCC recipients
-            if (isset($item['header_to'])) {
-                continue;
-            }
-
-            if (isset($item['name'])) {
-                $addresses[$item['email']] = $item['name'];
-            } else {
-                $addresses[] = $item['email'];
-            }
-        }
-
-        return $addresses;
+        return $this->_to;
     }
 
     /**
@@ -281,13 +297,36 @@ class Message extends BaseMessage
      * You may pass an array of addresses if multiple recipients should receive this message.
      * You may also specify receiver name in addition to email address using format:
      * `[email => name]`.
+     * You may also pass an associative array with Sparkpost user-specific substitution (template) data and metadata,
+     * where key is the recipient email and value is an array containing:
+     * [
+     *  name => optional recipient name,
+     *  tags => [optional array of tags],
+     *  metadata => [optional array of metadata],
+     *  substitution_data => [optional array of user-specific template data],
+     * ]
      * @return $this self reference.
      */
     public function setTo($to)
     {
-        $this->addRecipient($to);
+        unset($this->_to['list_id']);
+
+        if (is_string($to)) {
+            $to = $to ? [$to] : [];
+        }
+
+        $this->_to = $this->extractUserData($to);
 
         return $this;
+    }
+
+    /**
+     * Returns user-specific data for this Message.
+     * @return array
+     */
+    public function getUserData()
+    {
+        return $this->_userData;
     }
 
     /**
@@ -340,45 +379,33 @@ class Message extends BaseMessage
             return [];
         }
 
-        $addresses = [];
-        foreach ($this->_to as $item) {
-            $item = $item['address'];
-
-            if (!$this->isCopyRecipient($item)) {
-                continue;
-            }
-
-            if (isset($item['name'])) {
-                $addresses[$item['email']] = $item['name'];
-            } else {
-                $addresses[] = $item['email'];
-            }
-        }
-
-        return $addresses;
+        return $this->_cc;
     }
 
     /**
      * Sets the Cc (additional copy receiver) addresses of this message.
      *
-     * Both CC and BCC recipients require set 'header_to' field, it should be the email of the main recipient.
-     * SparkPost distinguish CC and BCC recipients by having the same email in 'Cc' header of the message/template.
-     *
      * @param string|array $cc copy receiver email address.
      * You may pass an array of addresses if multiple recipients should receive this message.
      * You may also specify receiver name in addition to email address using format:
      * `[email => name]`.
+     * You may also pass an associative array with Sparkpost user-specific substitution (template) data and metadata,
+     * where key is the recipient email and value is an array containing:
+     * [
+     *  name => optional recipient name,
+     *  tags => [optional array of tags],
+     *  metadata => [optional array of metadata],
+     *  substitution_data => [optional array of user-specific template data],
+     * ]
      * @return $this self reference.
      */
     public function setCc($cc)
     {
-        $this->addRecipient($cc, true);
-
         if (is_string($cc)) {
-            $this->_headers['Cc'] = $cc;
-        } elseif (is_array($cc)) {
-            $this->_headers['Cc'] = $this->emailsToString($cc);
+            $cc = $cc ? [$cc] : [];
         }
+
+        $this->_cc = $this->extractUserData($cc);
 
         return $this;
     }
@@ -393,22 +420,7 @@ class Message extends BaseMessage
             return [];
         }
 
-        $addresses = [];
-        foreach ($this->_to as $item) {
-            $item = $item['address'];
-
-            if (!$this->isCopyRecipient($item, true)) {
-                continue;
-            }
-
-            if (isset($item['name'])) {
-                $addresses[$item['email']] = $item['name'];
-            } else {
-                $addresses[] = $item['email'];
-            }
-        }
-
-        return $addresses;
+        return $this->_bcc;
     }
 
     /**
@@ -421,11 +433,23 @@ class Message extends BaseMessage
      * You may pass an array of addresses if multiple recipients should receive this message.
      * You may also specify receiver name in addition to email address using format:
      * `[email => name]`.
+     * You may also pass an associative array with Sparkpost user-specific substitution (template) data and metadata,
+     * where key is the recipient email and value is an array containing:
+     * [
+     *  name => optional recipient name,
+     *  tags => [optional array of tags],
+     *  metadata => [optional array of metadata],
+     *  substitution_data => [optional array of user-specific template data],
+     * ]
      * @return $this self reference.
      */
     public function setBcc($bcc)
     {
-        $this->addRecipient($bcc, true);
+        if (is_string($bcc)) {
+            $bcc = $bcc ? [$bcc] : [];
+        }
+
+        $this->_bcc = $this->extractUserData($bcc);
 
         return $this;
     }
@@ -822,8 +846,7 @@ class Message extends BaseMessage
      */
     public function toSparkPostArray()
     {
-
-        $this->prepareCopyRecipients();
+        $this->prepareRecipients();
 
         $messageArray = [];
 
@@ -851,40 +874,6 @@ class Message extends BaseMessage
     }
 
     /**
-     * Processes given emails and fill recipients field
-     * @param array|string $emails
-     * @param bool $copy adds header_to field with a placeholder to make the recipient(s) a CC/BCC copy
-     */
-    protected function addRecipient($emails, $copy = false)
-    {
-        // unset possible used list id, if user is going to set recipients
-        unset($this->_to['list_id']);
-
-        if (is_string($emails)) {
-            $emails = [$emails];
-        }
-
-        foreach ($emails as $email => $name) {
-            if (is_int($email)) {
-                $address = [
-                    'email' => trim($name),
-                ];
-            } else {
-                $address = [
-                    'name' => trim($name),
-                    'email' => trim($email),
-                ];
-            }
-
-            if ($copy) {
-                $address['header_to'] = '%mainRecipient%';
-            }
-
-            $this->_to[] = ['address' => $address];
-        }
-    }
-
-    /**
      * Converts emails array to the string: ['name' => 'email'] -> '"name" <email>'
      * @param array $emails
      * @return string
@@ -907,27 +896,64 @@ class Message extends BaseMessage
     }
 
     /**
-     * Goes through all recipients to find the main recipient
-     * and replaces placeholder in 'header_to' field in copy recipients
+     * Compile To, Cc and Bcc recipients to _sparkpostRecipients list, set needed for CC headers.
+     *
+     * To mark email as a Cc email we need to set 'header_to' equals the main recipients + set Cc header equals Cc recipients.
+     * To mark email as a Bcc email we just need to set 'header_to' equals the main recipients.
      */
-    private function prepareCopyRecipients()
+    private function prepareRecipients()
     {
-        $main = '';
-        // find the main recipient
-        foreach ($this->_to as $recipient) {
-            if (!$main && !isset($recipient['address']['header_to'])) {
-                $main = $recipient['address']['email'];
-                break;
+        $this->_sparkpostRecipients = [];
+
+        // To
+        foreach ($this->_to as $email => $name) {
+            if (is_int($email)) {
+                $email = $name;
+                $address = ['email' => $email];
+            } else {
+                $address = ['email' => $email, 'name' => $name];
             }
+
+            // Include user-specific data.
+            $this->_sparkpostRecipients[] = array_merge(
+                ['address' => $address],
+                ArrayHelper::getValue($this->_userData, $email, [])
+            );
         }
 
-        if ($main) {
-            foreach ($this->_to as &$recipient) {
-                if (isset($recipient['address']['header_to'])) {
-                    $recipient['address']['header_to'] = str_replace('%mainRecipient', $main,
-                        $recipient['address']['header_to']);
-                }
+        $toRecipients = $this->emailsToString($this->_to);
+
+        // Cc
+        foreach ($this->_cc as $email => $name) {
+            if (is_int($email)) {
+                $address = ['email' => $name, 'header_to' => $toRecipients];
+            } else {
+                $address = ['email' => $email, 'name' => $name];
             }
+
+            // Include user-specific data.
+            $this->_sparkpostRecipients[] = array_merge(
+                ['address' => $address],
+                ArrayHelper::getValue($this->_userData, $email, [])
+            );
+        }
+        if ($this->_cc) {
+            $this->_headers['Cc'] = $this->emailsToString($this->_cc);
+        }
+
+        // Bcc
+        foreach ($this->_bcc as $email => $name) {
+            if (is_int($email)) {
+                $address = ['email' => $name, 'header_to' => $toRecipients];
+            } else {
+                $address = ['email' => $email, 'name' => $name];
+            }
+
+            // Include user-specific data.
+            $this->_sparkpostRecipients[] = array_merge(
+                ['address' => $address],
+                ArrayHelper::getValue($this->_userData, $email, [])
+            );
         }
     }
 
@@ -949,31 +975,38 @@ class Message extends BaseMessage
     }
 
     /**
-     * Checks whether the $recipient is a copy (CC) recipient or BCC recipient, if $checkBcc is true.
-     * CC differs from BCC: CC has email presented in 'Cc' header
-     *
-     * @param array $recipient ['email' => $email]
-     * @param bool $checkBcc do we check whether the recipient is a CC recipient or BCC
-     * @return bool
+     * Extracts user-specific data from given typical for setTo, setCc, setBcc methods array,
+     * fills $this->_userData property.
+     * Repeated in 'To', 'Cc', 'Bcc' addresses data will be overwritten in order of setters calls.
+     * @param array $addresses
+     * @return array list of addresses in canonical form
      */
-    private function isCopyRecipient($recipient, $checkBcc = false)
+    private function extractUserData($addresses)
     {
-        if (!isset($recipient['header_to'])) {
-            return false;
-        }
+        $cleanAddresses = [];
 
-        $result = $checkBcc ? true : false;
-        $ccRecipients = explode(',', ArrayHelper::getValue($this->_headers, 'Cc', ''));
-        foreach ($ccRecipients as $ccRecipient) {
-            if (preg_match("/^{$recipient['email']}$|<{$recipient['email']}>$/", $ccRecipient)) {
-                // email is presented in Cc header
+        // Transform given $to addresses to normal yii form by extracting sparkpost user-specific data.
+        foreach ($addresses as $email => $name) {
+            if (is_int($email)) {
+                $cleanAddresses[] = $name;
+            } elseif (is_array($name)) {
+                $this->_userData[$email] = [
+                    'metadata' => ArrayHelper::getValue($name, 'metadata', []),
+                    'substitution_data' => ArrayHelper::getValue($name, 'substitution_data', []),
+                    'tags' => ArrayHelper::getValue($name, 'tags', []),
+                ];
 
-                // if we search Bcc, then if email is presented in Cc header - it's not a Bcc email
-                $result = $checkBcc ? false : true;
-                break;
+                $name = ArrayHelper::getValue($name, 'name');
+                if ($name) {
+                    $cleanAddresses[$email] = $name;
+                } else {
+                    $cleanAddresses[] = $email;
+                }
+            } else {
+                $cleanAddresses[$email] = $name;
             }
         }
 
-        return $result;
+        return $cleanAddresses;
     }
 }
